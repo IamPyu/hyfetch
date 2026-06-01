@@ -35,6 +35,17 @@ def run_rust():
         run_py()
         return
 
+    # Keep using execv on POSIX so the Rust binary replaces this Python wrapper.
+    # Windows has no equivalent process replacement; Python's execv starts the
+    # Rust executable and exits, which lets MSYS2 print the next prompt while
+    # hyfetch is still writing to the terminal.
+    if platform.system() == 'Windows':
+        try:
+            proc = subprocess.run([str(pd), *sys.argv[1:]])
+        except KeyboardInterrupt:
+            raise SystemExit(130)
+        raise SystemExit(proc.returncode)
+
     # Run the rust executable, passing in all arguments
     os.execv(str(pd), [str(pd), *sys.argv[1:]])
 
