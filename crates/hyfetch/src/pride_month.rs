@@ -1,8 +1,7 @@
 use std::fmt::Write as _;
 use std::io::{self, Write as _};
 use std::num::{NonZeroU16, NonZeroUsize, Wrapping};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 use std::{cmp, thread};
 
@@ -37,6 +36,64 @@ const TEXT_ASCII_SMALL: &str = r"
 ";
 
 const NOTICE: &str = "Press enter to continue";
+const CTRL_C: u8 = 0x03;
+
+fn wait_for_animation_input(mut input: impl io::Read) -> io::Result<()> {
+    let mut buf = [0_u8; 1];
+
+    loop {
+        match input.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(_) if matches!(buf[0], b'\r' | b'\n' | CTRL_C) => return Ok(()),
+            Ok(_) => {},
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {},
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+struct AnimationTerminalGuard {
+    alternate_screen: bool,
+}
+
+impl AnimationTerminalGuard {
+    fn enter() -> Result<Self> {
+        let mut guard = Self {
+            alternate_screen: false,
+        };
+
+        if let Err(err) = execute!(io::stdout(), EnterAlternateScreen) {
+            return Err(err).context("failed to enter alternate screen");
+        }
+        guard.alternate_screen = true;
+
+        Ok(guard)
+    }
+
+    fn leave(&mut self) -> Result<()> {
+        let mut first_err = None;
+
+        if self.alternate_screen {
+            if let Err(err) = execute!(io::stdout(), LeaveAlternateScreen) {
+                first_err =
+                    Some(anyhow::Error::new(err).context("failed to leave alternate screen"));
+            } else {
+                self.alternate_screen = false;
+            }
+        }
+
+        match first_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for AnimationTerminalGuard {
+    fn drop(&mut self) {
+        let _ = self.leave();
+    }
+}
 
 pub fn start_animation(color_mode: AnsiMode) -> Result<()> {
     let (w, h) = {
@@ -151,9 +208,9 @@ pub fn start_animation(color_mode: AnsiMode) -> Result<()> {
 
                 let border = 1u16 + if y == text_start_y || y == (text_end_y - 1) { 0 } else { 1 };
                 let text_bounds_x1 = text_start_x - border;
-                let text_bounds_x2 = text_end_x - border;
+                let text_bounds_x2 = text_end_x + border;
                 let notice_bounds_x1 = notice_start_x - 1;
-                let notice_bounds_x2 = notice_end_x - 1;
+                let notice_bounds_x2 = notice_end_x + 1;
 
                 // If it's a switching point
                 if idx.rem_euclid(NonZeroUsize::from(block_width).get()) == 0
@@ -221,35 +278,19 @@ pub fn start_animation(color_mode: AnsiMode) -> Result<()> {
         Ok(())
     };
 
-    let key_pressed = Arc::new(AtomicBool::new(false));
-
-    // TODO: use non-blocking I/O; no need for another thread
-    let _handle = thread::spawn({
-        let key_pressed = Arc::clone(&key_pressed);
-        move || {
-            loop {
-                match io::stdin().lines().next() {
-                    Some(Ok(_)) => {
-                        key_pressed.store(true, Ordering::Release);
-                        break;
-                    },
-                    Some(Err(err)) => {
-                        eprintln!("failed to read line from stdin: {err}");
-                    },
-                    None => {
-                        // EOF
-                    },
-                }
-            }
-        }
-    });
-
     let mut frame: Wrapping<usize> = Wrapping(0);
 
     const SPEED: u8 = 2;
     let frame_delay = Duration::from_secs_f32(2.0 / 25.0);
 
-    execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
+    let mut terminal = AnimationTerminalGuard::enter()?;
+    let (input_tx, input_rx) = mpsc::channel();
+    let input_thread = thread::spawn(move || {
+        if let Err(err) = wait_for_animation_input(io::stdin().lock()) {
+            eprintln!("failed to read input: {err}");
+        }
+        let _ = input_tx.send(());
+    });
 
     loop {
         // Move cursor to the top left corner
@@ -258,12 +299,13 @@ pub fn start_animation(color_mode: AnsiMode) -> Result<()> {
         frame += usize::from(SPEED);
         thread::sleep(frame_delay);
 
-        if key_pressed.load(Ordering::Acquire) {
+        if input_rx.try_recv().is_ok() {
             break;
         }
     }
 
-    execute!(io::stdout(), LeaveAlternateScreen).context("failed to leave alternate screen")?;
+    let _ = input_thread.join();
+    terminal.leave()?;
 
     Ok(())
 }

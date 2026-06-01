@@ -122,7 +122,10 @@ fn main() -> Result<()> {
     let cache_path = get_cache_path().context("failed to get cache path")?;
     let june_path = cache_path.join(format!("animation-displayed-{year}", year = now.year()));
     let show_pride_month = options.june
-        || now.month() == Month::June && !june_path.is_file() && io::stdout().is_terminal();
+        || now.month() == Month::June
+            && !june_path.is_file()
+            && io::stdin().is_terminal()
+            && io::stdout().is_terminal();
 
     if show_pride_month && !config.pride_month_disable {
         pride_month::start_animation(color_mode).context("failed to draw pride month animation")?;
