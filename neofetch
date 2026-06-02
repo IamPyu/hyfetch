@@ -2454,14 +2454,17 @@ get_packages() {
 }
 
 get_shell() {
+    local shell_name="${SHELL##*/}"
+    shell_name="${shell_name%.[Ee][Xx][Ee]}"
+
     case $shell_path in
         on)  shell="$SHELL " ;;
-        off) shell="${SHELL##*/} " ;;
+        off) shell="$shell_name " ;;
     esac
 
     [[ $shell_version != on ]] && return
 
-    case ${shell_name:=${SHELL##*/}} in
+    case $shell_name in
         bash)
             [[ $BASH_VERSION ]] ||
                 BASH_VERSION=$("$SHELL" -c "printf %s \"\$BASH_VERSION\"")

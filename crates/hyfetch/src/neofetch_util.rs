@@ -15,9 +15,10 @@ use itertools::Itertools as _;
 use anyhow::anyhow;
 #[cfg(feature = "macchina")]
 use crate::models::Palette;
-#[cfg(feature = "macchina")]
 #[cfg(windows)]
 use crate::utils::find_file;
+#[cfg(any(feature = "macchina", windows))]
+use crate::utils::find_in_path;
 #[cfg(windows)]
 use std::path::Path;
 #[cfg(windows)]
@@ -36,7 +37,7 @@ use crate::color_util::{printc, NeofetchAsciiIndexedColor, PresetIndexedColor};
 use crate::distros::Distro;
 use crate::types::{AnsiMode, Backend};
 #[cfg(feature = "macchina")]
-use crate::utils::{find_in_path, get_cache_path, input, process_command_status};
+use crate::utils::{get_cache_path, input, process_command_status};
 #[cfg(not(feature = "macchina"))]
 use crate::utils::{get_cache_path, input, process_command_status};
 
@@ -356,56 +357,140 @@ where
     Ok((width, height))
 }
 
+#[cfg(windows)]
+fn find_all_in_path<P>(program: P) -> Result<Vec<PathBuf>>
+where
+    P: AsRef<Path>,
+{
+    let program = program.as_ref();
+
+    if program.parent() != Some(Path::new("")) {
+        return Err(anyhow!("invalid command name {program:?}"));
+    };
+
+    let path_env = env::var_os("PATH").context("`PATH` env var is not set or invalid")?;
+    let mut matches = Vec::new();
+
+    for search_path in env::split_paths(&path_env) {
+        let path = search_path.join(program);
+        if let Some(path) = find_file(&path)
+            .with_context(|| format!("failed to check existence of file {path:?}"))?
+        {
+            push_unique_path(&mut matches, path);
+        }
+    }
+
+    Ok(matches)
+}
+
+#[cfg(windows)]
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if paths.iter().any(|existing| {
+        existing == &path || is_same_file(existing, &path).unwrap_or(false)
+    }) {
+        return;
+    }
+
+    paths.push(path);
+}
+
+#[cfg(windows)]
+fn push_existing_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if let Ok(Some(path)) = find_file(path) {
+        push_unique_path(paths, path);
+    }
+}
+
+#[cfg(windows)]
+fn is_windows_path_compatible_bash(path: &Path) -> bool {
+    let mut script = match tempfile::Builder::new()
+        .prefix("hyfetch-bash-probe")
+        .suffix(".sh")
+        .tempfile()
+    {
+        Ok(script) => script,
+        Err(_) => return false,
+    };
+
+    if script.write_all(b"exit 86\n").is_err() {
+        return false;
+    }
+
+    let script_path = script.path().to_string_lossy().replace('\\', "/");
+    let status = Command::new(path)
+        .arg(script_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    matches!(status.ok().and_then(|status| status.code()), Some(86))
+}
+
+#[cfg(windows)]
+fn bash_paths_from_git(git_path: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    let mut current = Some(git_path);
+    for _ in 0..6 {
+        let Some(parent) = current.and_then(Path::parent) else {
+            break;
+        };
+
+        push_existing_path(&mut candidates, parent.join(r"bin\bash.exe"));
+        push_existing_path(&mut candidates, parent.join(r"usr\bin\bash.exe"));
+        current = Some(parent);
+    }
+
+    if let Some(scoop_root) = scoop_root_from_git_path(git_path) {
+        for app in ["git-with-openssh", "git"] {
+            let app_root = scoop_root.join("apps").join(app).join("current");
+            push_existing_path(&mut candidates, app_root.join(r"bin\bash.exe"));
+            push_existing_path(&mut candidates, app_root.join(r"usr\bin\bash.exe"));
+        }
+    }
+
+    candidates
+}
+
+#[cfg(windows)]
+fn scoop_root_from_git_path(git_path: &Path) -> Option<PathBuf> {
+    let parent = git_path.parent()?;
+    let parent_name = parent.file_name()?.to_string_lossy();
+    if !parent_name.eq_ignore_ascii_case("shims") {
+        return None;
+    }
+
+    parent.parent().map(Path::to_path_buf)
+}
+
 /// Gets the absolute path of the bash command.
 #[cfg(windows)]
 fn bash_path() -> Result<PathBuf> {
-    // 1. Try to find a good bash.exe in PATH
-    let bash_in_path = find_in_path("bash.exe").unwrap_or(None);
-    if let Some(pth) = &bash_in_path {
-        // Check if it's not WSL bash
-        // See https://github.com/hykilpikonna/hyfetch/issues/233
-        let is_wsl = (|| {
-            let windir = env::var_os("windir")?;
-            let wsl_bash = Path::new(&windir).join(r"System32\bash.exe");
-            Some(is_same_file(pth, &wsl_bash).unwrap_or(false))
-        })()
-        .unwrap_or(false);
+    // 1. Try to find a good bash.exe in PATH.
+    let bash_candidates = find_all_in_path("bash.exe").unwrap_or_default();
+    if let Some(pth) = bash_candidates
+        .iter()
+        .find(|pth| is_windows_path_compatible_bash(pth))
+    {
+        return Ok(pth.clone());
+    }
 
-        if !is_wsl {
-            // Check if it's not MSYS bash https://stackoverflow.com/a/58418686/1529493
-            // We prefer the Git wrapper bash if possible, but we'll accept this if it's all we have.
-            if !pth.ends_with(r"Git\usr\bin\bash.exe") {
-                return Ok(pth.clone());
+    // 2. Try to find git.exe in PATH and look for bash.exe relative to it.
+    let git_candidates = find_all_in_path("git.exe")
+        .or_else(|_| find_in_path("git.exe").map(|pth| pth.into_iter().collect()))
+        .unwrap_or_default();
+    for git_path in git_candidates {
+        for pth in bash_paths_from_git(&git_path) {
+            if is_windows_path_compatible_bash(&pth) {
+                return Ok(pth);
             }
         }
     }
 
-    // 2. Try to find git.exe in PATH and look for bash.exe relative to it
-    if let Ok(Some(git_path)) = find_in_path("git.exe") {
-        let mut current = git_path.clone();
-        for _ in 0..3 {
-            if let Some(parent) = current.parent() {
-                let bin_bash = parent.join(r"bin\bash.exe");
-                if bin_bash.is_file() {
-                    return Ok(bin_bash);
-                }
-                let usr_bin_bash = parent.join(r"usr\bin\bash.exe");
-                if usr_bin_bash.is_file() {
-                    return Ok(usr_bin_bash);
-                }
-                current = parent.to_path_buf();
-            } else {
-                break;
-            }
-        }
-    }
-
-    // 3. Fallback to whatever bash we found in PATH (even if it was the MSYS one)
-    if let Some(pth) = bash_in_path {
-        return Ok(pth);
-    }
-
-    Err(anyhow!("bash.exe not found. Please ensure Git for Windows is installed and in your PATH."))
+    Err(anyhow!(
+        "compatible bash.exe not found. Please ensure Git for Windows is installed and in your PATH."
+    ))
 }
 
 /// Runs neofetch command, returning the piped stdout output.
