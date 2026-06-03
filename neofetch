@@ -3136,9 +3136,11 @@ get_cpu() {
 
                 "arm"* | "aarch64")
                     if [[ $(trim "$distro") == Android* ]]; then
-                        # Android roms have modified cpuinfo that shows CPU model as a string
+                        # Older Android ROMs show the CPU model as a string in cpuinfo.
                         cpu="$(awk -F':' '/Hardware/ {print $2; exit}' "$cpu_file")"
-                    else
+                    fi
+
+                    if [[ -z "$cpu" ]] && command -v lscpu &> /dev/null; then
                         # ARM linux displays binary model code in cpuinfo, which needs to be decoded with lscpu
                         if ! command -v python3 &> /dev/null; then
                             cpu="$(lscpu | awk -F': ' '/Vendor ID/ {print $2; exit}' ) $(lscpu | awk -F': ' '/Model name/ {print $2; exit}')"
@@ -3186,11 +3188,13 @@ if __name__ == '__main__':
     print('\n'.join(cpus))
 END
                             tmp_cpus=$(python3 -c "$py_script")
-                            while IFS= read -r line; do
-                                prin "${subtitle:+${subtitle}}" "$line"
-                            done <<< "$tmp_cpus"
+                            if [[ "$tmp_cpus" ]]; then
+                                while IFS= read -r line; do
+                                    prin "${subtitle:+${subtitle}}" "$line"
+                                done <<< "$tmp_cpus"
 
-                            return
+                                return
+                            fi
                         fi
                     fi
                 ;;
