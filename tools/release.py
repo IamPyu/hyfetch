@@ -84,6 +84,25 @@ def read_pyproject_name() -> str:
     return match.group(1)
 
 
+def read_changelog(version: str) -> str:
+    content = (ROOT / "README.md").read_text(encoding="utf-8")
+    heading = f"### {version}"
+    match = re.search(
+        rf"^{re.escape(heading)}\s*\n(?P<body>.*?)(?=^### \S|\Z)",
+        content,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+    if not match:
+        raise RuntimeError(f"Could not find changelog section {heading!r} in README.md")
+
+    body = match.group("body").strip()
+    if not body:
+        raise RuntimeError(f"Changelog section {heading!r} is empty")
+
+    return body + "\n"
+
+
 def normalize_tag(tag: str) -> Tuple[str, str]:
     match = VERSION_RE.match(tag)
     if not match:
@@ -199,6 +218,16 @@ def command_state(args: argparse.Namespace) -> None:
     write_output("github_release_complete", github_release_complete)
 
 
+def command_changelog(args: argparse.Namespace) -> None:
+    _, version = normalize_tag(args.version)
+    changelog = read_changelog(version)
+
+    if args.output:
+        Path(args.output).write_text(changelog, encoding="utf-8")
+    else:
+        print(changelog, end="")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Release workflow helpers")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -214,6 +243,11 @@ def build_parser() -> argparse.ArgumentParser:
     state.add_argument("--npm-package", required=True)
     state.add_argument("--repo", required=True)
     state.set_defaults(func=command_state)
+
+    changelog = subparsers.add_parser("changelog", help="Extract release notes from README.md")
+    changelog.add_argument("--version", required=True)
+    changelog.add_argument("--output")
+    changelog.set_defaults(func=command_changelog)
 
     return parser
 

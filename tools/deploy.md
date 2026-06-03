@@ -17,11 +17,18 @@ their trusted publishing flows.
 * [ ] Run `python -m tools.deploy-release {version}`
 * [ ] Watch the `Release` workflow
 
-The local script prepares the release commit and pushes the version tag. GitHub
-Actions creates/completes the GitHub Release, uploads Python artifacts, publishes
-to PyPI, and publishes to npm.
+The local script prepares the release commit and pushes the version tag. By
+default it also updates the built-in fastfetch binaries to the latest upstream
+release used by Python wheels. Use `--fastfetch-version {version}` to pin a
+specific upstream fastfetch release, or `--skip-fastfetch-update` to keep the
+current pin.
+
+GitHub Actions creates/completes the GitHub Release, uploads Python artifacts,
+publishes to PyPI, and publishes to npm.
 
 If the workflow fails after one stage already published, fix the problem and
-rerun it. If the fix changes the workflow itself, run the workflow manually with
-the same tag. The workflow checks PyPI, npm, and the GitHub Release first, so it
-will skip completed stages instead of publishing them again.
+rerun it manually with the same release tag. If the fix changes files needed by
+the failed stage, set `source_ref` to the branch or commit containing the fix,
+and turn off any stages that already completed. The workflow checks PyPI, npm,
+and the GitHub Release first, so completed stages are skipped instead of being
+published again.

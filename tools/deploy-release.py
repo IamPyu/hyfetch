@@ -6,6 +6,9 @@ import re
 import shlex
 import stat
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from packaging import version as pv
@@ -14,6 +17,16 @@ from tools.list_distros import generate_help
 from tools.reformat_readme import reformat_readme
 
 NEOFETCH_NEW_VERSION = ""
+FASTFETCH_RELEASE_API = 'https://api.github.com/repos/fastfetch-cli/fastfetch/releases'
+FASTFETCH_ASSETS = [
+    'fastfetch-windows-amd64.zip',
+    'fastfetch-linux-amd64.zip',
+    'fastfetch-linux-aarch64.zip',
+    'fastfetch-linux-armv7l.zip',
+    'fastfetch-musl-amd64.zip',
+    'fastfetch-macos-amd64.zip',
+    'fastfetch-macos-aarch64.zip',
+]
 RELEASE_FILES = [
     'Cargo.lock',
     'Cargo.toml',
@@ -23,6 +36,7 @@ RELEASE_FILES = [
     'hyfetch/__version__.py',
     'neofetch',
     'package.json',
+    'tools/build_pkg.sh',
 ]
 
 
@@ -95,6 +109,49 @@ def edit_versions(version: str):
 
     global NEOFETCH_NEW_VERSION
     NEOFETCH_NEW_VERSION = nf
+
+
+def fetch_fastfetch_release(release: str) -> dict:
+    """
+    Fetch fastfetch release metadata from GitHub.
+    """
+    if release == 'latest':
+        url = f'{FASTFETCH_RELEASE_API}/latest'
+    else:
+        tag = urllib.parse.quote(release, safe='')
+        url = f'{FASTFETCH_RELEASE_API}/tags/{tag}'
+
+    request = urllib.request.Request(url, headers={
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'hyfetch-release-script',
+    })
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and release.startswith('v'):
+            return fetch_fastfetch_release(release[1:])
+        raise
+
+
+def update_fastfetch_version(release: str) -> str:
+    """
+    Update the fastfetch binary version embedded in Python wheels.
+    """
+    print(f'Checking fastfetch {release}...')
+    metadata = fetch_fastfetch_release(release)
+    tag = metadata['tag_name']
+    assets = {asset['name'] for asset in metadata['assets']}
+    missing = sorted(set(FASTFETCH_ASSETS) - assets)
+    assert not missing, f'Fastfetch {tag} is missing required release assets: {", ".join(missing)}'
+
+    print(f'Editing tools/build_pkg.sh fastfetch version to {tag}...')
+    path = Path('tools/build_pkg.sh')
+    content = path.read_text()
+    content = re.sub(r'(?<=^FASTFETCH_VERSION=")[^"]+(?="$)', tag, content, flags=re.MULTILINE)
+    path.write_text(content)
+    return tag
 
 
 def finalize_neofetch():
@@ -182,6 +239,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='HyFetch Release Utility')
     parser.add_argument('version', help='Version to release')
     parser.add_argument(
+        '--fastfetch-version',
+        default='latest',
+        help='Fastfetch release tag to embed in Python wheels, or "latest" (default).',
+    )
+    parser.add_argument(
+        '--skip-fastfetch-update',
+        action='store_true',
+        help='Keep the existing FASTFETCH_VERSION in tools/build_pkg.sh.',
+    )
+    parser.add_argument(
         '--local-deploy',
         action='store_true',
         help='Publish from this machine after pushing tags. By default, GitHub Actions publishes the release.',
@@ -191,6 +258,8 @@ if __name__ == '__main__':
 
     pre_check()
     edit_versions(args.version)
+    if not args.skip_fastfetch_update:
+        update_fastfetch_version(args.fastfetch_version)
 
     finalize_neofetch()
     post_check()

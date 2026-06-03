@@ -11,6 +11,11 @@ on:
         description: "Existing release tag to publish, such as 2.1.1 or v2.1.1"
         required: true
         type: string
+      source_ref:
+        description: "Ref to build/publish from. Leave empty to use the release tag; set to master/a branch for recovery fixes."
+        required: false
+        default: ""
+        type: string
       create_github_release:
         description: "Create or complete the GitHub Release"
         required: true
@@ -40,26 +45,33 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       tag: ${{ steps.metadata.outputs.tag }}
+      source_ref: ${{ steps.release-refs.outputs.source_ref }}
       version: ${{ steps.metadata.outputs.version }}
       python_package: ${{ steps.metadata.outputs.python_package }}
       npm_package: ${{ steps.metadata.outputs.npm_package }}
     steps:
-      - name: Resolve release tag
-        id: release-tag
+      - name: Resolve release refs
+        id: release-refs
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            if [[ -n "${{ inputs.source_ref }}" ]]; then
+              echo "source_ref=${{ inputs.source_ref }}" >> "$GITHUB_OUTPUT"
+            else
+              echo "source_ref=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "source_ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.release-tag.outputs.tag }}
+          ref: ${{ steps.release-refs.outputs.source_ref }}
 
       - name: Validate checked-in versions
         id: metadata
-        run: python3 tools/release.py metadata --tag "${{ steps.release-tag.outputs.tag }}"
+        run: python3 tools/release.py metadata --tag "${{ steps.release-refs.outputs.tag }}"
 
   release-state:
     name: Check completed release stages
@@ -73,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.source_ref }}
 
       - name: Query registries and GitHub Release
         id: state
@@ -179,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.source_ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -221,29 +233,44 @@ jobs:
         && needs.release-state.outputs.github_release_complete != 'true'
       }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_ref }}
+
       - uses: actions/download-artifact@v4
         with:
           name: python-dist-${{ needs.metadata.outputs.version }}
           path: dist
 
-      - name: Create release if needed
+      - name: Write release notes
+        run: |
+          python3 tools/release.py changelog \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --output RELEASE_NOTES.md
+
+      - name: Create or update release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.metadata.outputs.tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "GitHub Release $TAG already exists."
+            gh release edit "$TAG" \
+              --title "$VERSION" \
+              --notes-file RELEASE_NOTES.md
           else
             gh release create "$TAG" \
               --verify-tag \
-              --title "HyFetch $VERSION" \
-              --generate-notes
+              --title "$VERSION" \
+              --notes-file RELEASE_NOTES.md
           fi
 
       - name: Upload missing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.metadata.outputs.tag }}
         run: |
           mapfile -t existing_assets < <(gh release view "$TAG" --json assets --jq '.assets[].name')
@@ -321,12 +348,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.source_ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Use npm with trusted publishing support
         run: npm install -g npm@11
