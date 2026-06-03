@@ -150,7 +150,7 @@ distro_shorthand="off"
 # Show/Hide OS Architecture.
 # Show 'x86_64', 'x86' and etc in 'Distro:' output.
 #
-# Default: 'on'
+# Default: 'off'
 # Values:  'on', 'off'
 # Flag:    --os_arch
 #
@@ -332,6 +332,19 @@ speed_shorthand="on"
 # on:   'Intel i7-6500U'
 # off:  'i7-6500U (4)'
 cpu_brand="on"
+
+# CPU Codename
+# Hide/Show CPU codename.
+#
+# Default: 'on'
+# Values:  'on', 'off'
+# Flag:    --cpu_codename
+# Supports: Linux with Intel x86 CPUs
+#
+# Example:
+# on:  'Intel i7-8700K [Coffee Lake] (12) @ 3.7GHz'
+# off: 'Intel i7-8700K (12) @ 3.7GHz'
+cpu_codename="off"
 
 # CPU Speed
 # Hide/Show CPU speed.
@@ -3032,6 +3045,8 @@ get_wm_theme() {
 }
 
 get_cpu() {
+    cpu_codename_label=
+
     case $os in
         "Ironclad")
             cpu="$(cpuinfo -n) ($(cpuinfo -c)) @ $(cpuinfo -f)"
@@ -3131,6 +3146,7 @@ END
             # If cpu is not detected on a platform-specific bases, fallback to cpuinfo method
             [[ -z "$cpu" ]] && cpu="$(awk -F '\\s*: | @' '/model name|Model|uarch|Hardware|Processor|^cpu model|chip type|^cpu type/ { print $2; exit}' "$cpu_file")"
             [[ -z "$cpu" ]] && cpu="$(awk -F '\\s*: | @' '/Hardware/ {print $2; exit}' "$cpu_file")"
+            cpu_codename_label="$(get_cpu_codename "$cpu_file")"
 
             speed_dir="/sys/devices/system/cpu/cpu0/cpufreq"
 
@@ -3436,6 +3452,10 @@ END
         cpu="${cpu/Qualcomm }"
     fi
 
+    # Add CPU codename to the output.
+    [[ "$cpu_codename" == "on" && "$cpu_codename_label" ]] && \
+        cpu="$cpu [$cpu_codename_label]"
+
     # Add CPU cores to the output.
     [[ "$cpu_cores" != "off" && "$cores" ]] && \
         case $os in
@@ -3478,6 +3498,113 @@ END
         deg="[${deg/${deg: -1}}.${deg: -1}°${cpu_temp:-C}]"
         cpu="$cpu $deg"
     fi
+}
+
+get_cpu_codename() {
+    local cpu_file="${1:-/proc/cpuinfo}"
+    local vendor_id family model stepping cpu_codename_label
+
+    [[ -r "$cpu_file" ]] || return
+
+    IFS=$'\t' read -r vendor_id family model stepping < <(
+        awk -F ': *' '
+            /^vendor_id[[:space:]]*:/ {vendor_id=$2}
+            /^cpu family[[:space:]]*:/ {family=$2}
+            /^model[[:space:]]*:/ {model=$2}
+            /^stepping[[:space:]]*:/ {stepping=$2}
+            vendor_id && family && model && stepping {
+                print vendor_id "\t" family "\t" model "\t" stepping
+                found=1
+                exit
+            }
+            END {
+                if (!found) {
+                    print vendor_id "\t" family "\t" model "\t" stepping
+                }
+            }
+        ' "$cpu_file"
+    )
+
+    [[ "$vendor_id" == "GenuineIntel" ]] || return
+
+    [[ "$family" && "$model" ]] || return
+
+    # Intel display family/model table, derived from cpufetch src/x86/uarch.c.
+    # Linux /proc/cpuinfo already exposes the display model as decimal.
+    case "$family:$model:$stepping" in
+        "5:9:0" | "5:10:0") cpu_codename_label="Lakemont" ;;
+        "6:78:8" | "6:94:8") cpu_codename_label="Kaby Lake" ;;
+        "6:85:6" | "6:85:7") cpu_codename_label="Cascade Lake" ;;
+        "6:85:10") cpu_codename_label="Cooper Lake" ;;
+        "6:142:11") cpu_codename_label="Whiskey Lake" ;;
+        "6:143:8") cpu_codename_label="Sapphire Rapids" ;;
+        "6:158:9") cpu_codename_label="Kaby Lake" ;;
+        "6:158:10" | "6:158:11" | "6:158:12" | "6:158:13") cpu_codename_label="Coffee Lake" ;;
+    esac
+
+    if [[ -z "$cpu_codename_label" ]]; then
+        case "$family:$model" in
+            "4:0" | "4:1") cpu_codename_label="i80486DX" ;;
+            "4:2") cpu_codename_label="i80486SX" ;;
+            "4:3") cpu_codename_label="i80486DX2" ;;
+            "4:4") cpu_codename_label="i80486SL" ;;
+            "4:5") cpu_codename_label="i80486SX2" ;;
+            "4:7") cpu_codename_label="i80486DX2WB" ;;
+            "4:8") cpu_codename_label="i80486DX4" ;;
+            "4:9") cpu_codename_label="i80486DX4WB" ;;
+            "5:0" | "5:1") cpu_codename_label="P5" ;;
+            "5:2" | "5:7") cpu_codename_label="P54C" ;;
+            "5:3") cpu_codename_label="P24T (Overdrive)" ;;
+            "5:4") cpu_codename_label="P55C (MMX)" ;;
+            "5:8") cpu_codename_label="Tillamook" ;;
+            "5:9") cpu_codename_label="P5 (MMX)" ;;
+            "6:0" | "6:1" | "6:2") cpu_codename_label="P6 (Pentium II)" ;;
+            "6:3") cpu_codename_label="P6 (Klamath)" ;;
+            "6:5") cpu_codename_label="P6 (Deschutes)" ;;
+            "6:6") cpu_codename_label="P6 (Dixon)" ;;
+            "6:7") cpu_codename_label="P6 (Katmai)" ;;
+            "6:8") cpu_codename_label="P6 (Coppermine)" ;;
+            "6:9") cpu_codename_label="P6 (Pentium M)" ;;
+            "6:10") cpu_codename_label="P6 (Coppermine T)" ;;
+            "6:11") cpu_codename_label="P6 (Tualatin)" ;;
+            "6:13" | "6:21") cpu_codename_label="Dothan" ;;
+            "6:14") cpu_codename_label="Yonah" ;;
+            "6:15" | "6:22") cpu_codename_label="Merom" ;;
+            "6:23" | "6:29") cpu_codename_label="Penryn" ;;
+            "6:26" | "6:30" | "6:31" | "6:46") cpu_codename_label="Nehalem" ;;
+            "6:28" | "6:38") cpu_codename_label="Bonnell" ;;
+            "6:37" | "6:44" | "6:47") cpu_codename_label="Westmere" ;;
+            "6:39" | "6:53" | "6:54") cpu_codename_label="Saltwell" ;;
+            "6:42" | "6:45") cpu_codename_label="Sandy Bridge" ;;
+            "6:55" | "6:74" | "6:77" | "6:90" | "6:93") cpu_codename_label="Silvermont" ;;
+            "6:58" | "6:62") cpu_codename_label="Ivy Bridge" ;;
+            "6:60" | "6:63" | "6:69" | "6:70") cpu_codename_label="Haswell" ;;
+            "6:61" | "6:71" | "6:79" | "6:86") cpu_codename_label="Broadwell" ;;
+            "6:76" | "6:117") cpu_codename_label="Airmont" ;;
+            "6:78" | "6:85" | "6:94") cpu_codename_label="Skylake" ;;
+            "6:87") cpu_codename_label="Knights Landing" ;;
+            "6:92" | "6:95") cpu_codename_label="Goldmont" ;;
+            "6:102") cpu_codename_label="Palm Cove" ;;
+            "6:106" | "6:108" | "6:125" | "6:157") cpu_codename_label="Sunny Cove" ;;
+            "6:122") cpu_codename_label="Goldmont Plus" ;;
+            "6:126") cpu_codename_label="Ice Lake" ;;
+            "6:133") cpu_codename_label="Knights Mill" ;;
+            "6:134" | "6:138" | "6:150" | "6:156") cpu_codename_label="Tremont" ;;
+            "6:140" | "6:141") cpu_codename_label="Tiger Lake" ;;
+            "6:151" | "6:154" | "6:190") cpu_codename_label="Alder Lake" ;;
+            "6:165" | "6:166") cpu_codename_label="Comet Lake" ;;
+            "6:167") cpu_codename_label="Rocket Lake" ;;
+            "6:183" | "6:186" | "6:191") cpu_codename_label="Raptor Lake" ;;
+            "11:0") cpu_codename_label="Knights Ferry" ;;
+            "11:1") cpu_codename_label="Knights Corner" ;;
+            "15:0" | "15:1") cpu_codename_label="Willamette" ;;
+            "15:2") cpu_codename_label="Northwood" ;;
+            "15:3" | "15:4") cpu_codename_label="Prescott" ;;
+            "15:6") cpu_codename_label="Cedar Mill" ;;
+        esac
+    fi
+
+    [[ "$cpu_codename_label" ]] && printf '%s\n' "$cpu_codename_label"
 }
 
 get_gpu() {
@@ -6601,6 +6728,8 @@ INFO:
                                 1 GHz.
 
     --cpu_brand on/off          Enable/Disable CPU brand in output.
+    --cpu_codename on/off       Enable/Disable CPU codename in output.
+                                NOTE: This currently supports Linux with Intel x86 CPUs.
     --cpu_cores type            Whether or not to display the number of CPU cores
                                 Possible values: logical, physical, off
 
@@ -6874,6 +7003,7 @@ get_args() {
             "--kernel_shorthand") kernel_shorthand="$2" ;;
             "--uptime_shorthand") uptime_shorthand="$2" ;;
             "--cpu_brand") cpu_brand="$2" ;;
+            "--cpu_codename") cpu_codename="$2" ;;
             "--gpu_brand") gpu_brand="$2" ;;
             "--gpu_type") gpu_type="$2" ;;
             "--refresh_rate") refresh_rate="$2" ;;
