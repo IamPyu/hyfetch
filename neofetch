@@ -190,6 +190,16 @@ uptime_shorthand="on"
 # off:  '1801MiB / 7881MiB'
 memory_percent="on"
 
+# Report Linux used memory from MemAvailable.
+#
+# Default: 'off'
+# Values:  'on', 'off'
+# Flag:    --memory_report_available
+#
+# on:  Calculate used memory as 'MemTotal - MemAvailable'
+# off: Calculate used memory as 'MemTotal + Shmem - MemFree - Buffers - Cached - SReclaimable'
+memory_report_available="off"
+
 # Change memory output unit.
 #
 # Default: 'mib'
@@ -3939,6 +3949,8 @@ get_memory() {
         "Linux" | "Windows")
             # MemUsed = Memtotal + Shmem - MemFree - Buffers - Cached - SReclaimable
             # Source: https://github.com/KittyKatt/screenFetch/issues/386#issuecomment-249312716
+            mem_used=0
+            mem_avail=
             while IFS=":" read -r a b; do
                 case $a in
                     "MemTotal") ((mem_used+=${b/kB})); mem_total="${b/kB}" ;;
@@ -3947,15 +3959,13 @@ get_memory() {
                         mem_used="$((mem_used-${b/kB}))"
                     ;;
 
-                    # Available since Linux 3.14rc (34e431b0ae398fc54ea69ff85ec700722c9da773).
-                    # If detected this will be used over the above calculation for mem_used.
                     "MemAvailable")
                         mem_avail=${b/kB}
                     ;;
                 esac
             done < /proc/meminfo
 
-            [[ $mem_avail ]] && mem_used=$((mem_total - mem_avail))
+            [[ "$memory_report_available" == "on" && "$mem_avail" ]] && mem_used=$((mem_total - mem_avail))
         ;;
 
         "Mac OS X" | "macOS" | "iPhone OS")
@@ -6931,6 +6941,8 @@ INFO:
     --song_format format        Print the song data in a specific format (see config file).
     --song_shorthand on/off     Print the Artist/Album/Title on separate lines.
     --memory_percent on/off     Display memory percentage.
+    --memory_report_available on/off
+                                Report Linux used memory from MemAvailable.
     --memory_unit (k/m/g/t)ib   Memory output unit.
     --memory_precision integer  Change memory output precision. (≥0, default=2)
     --music_player player-name  Manually specify a player to use.
@@ -7174,6 +7186,7 @@ get_args() {
             "--song_shorthand") song_shorthand="$2" ;;
             "--music_player") music_player="$2" ;;
             "--memory_percent") memory_percent="$2" ;;
+            "--memory_report_available") memory_report_available="$2" ;;
             "--memory_unit") memory_unit="$2" ;;
             "--memory_precision") mem_precision="$2" ;;
             "--cpu_temp")
