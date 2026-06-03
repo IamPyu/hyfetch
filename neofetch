@@ -2322,13 +2322,51 @@ get_packages() {
 
             if [[ -z "$package_minimal" ]]; then
                 # Steam games
-                STEAM_P=".local/share/Steam/steamapps/common"
-                if [[ -d "$HOME/$STEAM_P" ]]; then
-                    manager=steam && dir "$HOME/$STEAM_P/*/"
-                elif [[ -d "$HOME/.var/app/com.valvesoftware.Steam/$STEAM_P" ]]; then
-                    manager=steam && dir "$HOME/.var/app/com.valvesoftware.Steam/$STEAM_P/*/"
-                elif [[ -d "$HOME/.steam/steam/steamapps/common" ]]; then
-                    manager=steam && dir "$HOME/.steam/steam/steamapps/common/*/"
+                steam_common_dirs=()
+                steam_add_library() {
+                    local steam_common_dir="$1/steamapps/common"
+                    local steam_existing
+
+                    [[ -d "$steam_common_dir" ]] || return
+                    steam_common_dir="$(cd "$steam_common_dir" && pwd -P)" || return
+
+                    for steam_existing in "${steam_common_dirs[@]}"; do
+                        [[ "$steam_existing" == "$steam_common_dir" ]] && return
+                    done
+
+                    steam_common_dirs+=("$steam_common_dir")
+                }
+
+                for steam_root in \
+                    "$HOME/.local/share/Steam" \
+                    "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
+                    "$HOME/.steam/steam" \
+                    "$HOME/.steam/root"
+                do
+                    steam_library_file="$steam_root/steamapps/libraryfolders.vdf"
+
+                    if [[ -f "$steam_library_file" ]]; then
+                        while IFS= read -r steam_library; do
+                            steam_add_library "$steam_library"
+                        done < <(awk -F '"' '
+                            /"path"[[:space:]]+"/ { print $4; next }
+                            /^[[:space:]]*"[0-9]+"[[:space:]]+"/ && $4 ~ /^\// { print $4 }
+                        ' "$steam_library_file")
+                    fi
+
+                    steam_add_library "$steam_root"
+                done
+
+                steam_packages=0
+                for steam_common_dir in "${steam_common_dirs[@]}"; do
+                    steam_games=("$steam_common_dir"/*/)
+                    [[ -e "${steam_games[0]}" ]] && ((steam_packages+=${#steam_games[@]}))
+                done
+
+                if ((steam_packages > 0)); then
+                    ((packages+=steam_packages))
+                    manager=steam
+                    pac "$steam_packages"
                 fi
             fi
 
