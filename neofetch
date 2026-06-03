@@ -1047,6 +1047,7 @@ get_os() {
         AIX)      os=AIX ;;
         IRIX*)    os=IRIX ;;
         FreeMiNT) os=FreeMiNT ;;
+        Fiwix)    os=Fiwix ;;
         Interix)  os=Interix ;;
         Ironclad) os=Ironclad;;
         OSF1)     os=digitalUNIX ;;
@@ -1077,7 +1078,7 @@ get_distro() {
     [[ $distro ]] && return
 
     case $os in
-        Linux|BSD|MINIX|Ironclad)
+        Linux|BSD|MINIX|Ironclad|Fiwix)
             if [[ -f /bedrock/etc/bedrock-release && -z $BEDROCK_RESTRICT ]]; then
                 case $distro_shorthand in
                     on|tiny) distro="Bedrock Linux" ;;
@@ -10289,6 +10290,27 @@ ${c1}            ,,:;;;;:,,
      ,+%##################%;
         :+?S##########S?+:
             ,:;++++;:,
+EOF
+        ;;
+
+        "FiwixOS"* | "Fiwix"*)
+            set_colors 45 45 18
+            read -rd '' ascii_data <<'EOF'
+ ${c1}###########.${c3}###########
+  ${c1}###########.${c3}###########
+   ${c1}###########.${c3}###########
+    ${c1}###########.${c3}###########
+      ${c1}##########.${c3}###########
+     ${c1}#############.${c3}##########
+    ${c1}###############.${c3}##########
+   ${c1}#################.${c3}##########
+    ${c1}###############.${c3}##########
+     ${c1}#############.${c3}##########
+      ${c1}###########.${c3}##########
+    ${c1}############.${c3}##########
+   ${c1}############.${c3}##########
+  ${c1}############.${c3}##########
+ ${c1}###########.${c3}##########
 EOF
         ;;
 
