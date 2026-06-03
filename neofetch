@@ -2226,12 +2226,7 @@ get_packages() {
 
             has port       && pkgs_h=1 tot port installed && ((packages-=1))
 
-            # Using the dnf package cache is much faster than rpm.
-            if has dnf && type -p sqlite3 >/dev/null && [[ -f /var/cache/dnf/packages.db ]]; then
-                pac "$(sqlite3 /var/cache/dnf/packages.db "SELECT count(pkg) FROM installed")"
-            else
-                has rpm && tot rpm -qa --nodigest --nosignature
-            fi
+            has rpm && tot rpm -qa --nodigest --nosignature
 
             # 'mine' conflicts with minesweeper games.
             [[ -f /etc/SDE-VERSION ]] &&
